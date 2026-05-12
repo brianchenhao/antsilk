@@ -1,0 +1,112 @@
+# ============================================================
+# Python package (src/antsilk + tests)
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# Test + coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ============================================================
+# Antsilk runtime artifacts (SQLite ledger + JSONL sink)
+# ============================================================
+# Default sink output — never commit captured events
+antsilk_events.db
+antsilk_events.db-wal
+antsilk_events.db-shm
+antsilk_events.jsonl
+
+# Generic catch-all in case adopters/tests create other names
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+events.jsonl
+
+# ============================================================
+# MkDocs (docs/ → docs.antsilk.com)
+# ============================================================
+# MkDocs default build output. Path depends on where mkdocs.yml lives:
+# if docs/mkdocs.yml, build goes to docs/site/
+docs/site/
+/site/_mkdocs_build/   # use this if you reconfigure site_dir to avoid collision
+
+# ============================================================
+# Astro landing page (site/ → antsilk.com)
+# ============================================================
+site/node_modules/
+site/dist/
+site/.astro/
+site/.cache/
+site/.output/
+site/.vercel/
+site/.netlify/
+
+# ============================================================
+# Secrets + env
+# ============================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Misc
+# ============================================================
+*.log
+logs/
+tmp/
+.cache/
