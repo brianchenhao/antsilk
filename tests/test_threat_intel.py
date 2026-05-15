@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 
 import pytest
 
 from antsilk.rules.threat_intel import (
+    ThreatIntelManager,
     ThreatIntelStore,
     _merge_ranges,
     parse,
@@ -144,3 +146,135 @@ def test_store_size_reflects_range_count() -> None:
     assert store.size() == 0
     store.load([(_ip("1.0.0.0"), _ip("1.0.0.255")), (_ip("2.0.0.0"), _ip("2.0.0.255"))])
     assert store.size() == 2
+
+
+# ------------------------ ThreatIntelManager --------------------
+
+def test_manager_refresh_with_synthetic_feed() -> None:
+    """Plan step 7: synthetic feed containing 127.0.0.1 blocks loopback."""
+
+    def fake_fetcher(_url: str) -> str:
+        return "127.0.0.0/24\n"
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["fake://test"], fetcher=fake_fetcher)
+        await mgr.refresh()
+        assert mgr.lookup("127.0.0.1") is True
+        assert mgr.lookup("127.0.0.255") is True
+        assert mgr.lookup("8.8.8.8") is False
+
+    asyncio.run(go())
+
+
+def test_manager_aggregates_multiple_feeds() -> None:
+    feeds_data = {
+        "feed-a": "1.1.1.0/24\n",
+        "feed-b": "2.2.2.0/24\n",
+    }
+
+    def fake(url: str) -> str:
+        return feeds_data[url]
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=list(feeds_data.keys()), fetcher=fake)
+        await mgr.refresh()
+        assert mgr.lookup("1.1.1.100") is True
+        assert mgr.lookup("2.2.2.100") is True
+        assert mgr.lookup("3.3.3.3") is False
+
+    asyncio.run(go())
+
+
+def test_manager_first_fetch_failure_serves_empty_store() -> None:
+    """Bootstrap fail-open: middleware boots empty, app still serves."""
+
+    def boom(_url: str) -> str:
+        raise RuntimeError("network down")
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["a", "b"], fetcher=boom)
+        await mgr.refresh()  # must not raise
+        assert mgr.store.size() == 0
+        assert mgr.lookup("127.0.0.1") is False
+
+    asyncio.run(go())
+
+
+def test_manager_keeps_previous_set_when_all_feeds_fail() -> None:
+    state = {"call": 0}
+
+    def alternating(url: str) -> str:
+        state["call"] += 1
+        if state["call"] <= 1:
+            return "10.0.0.0/8\n"
+        raise RuntimeError("transient failure")
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["a"], fetcher=alternating)
+        await mgr.refresh()
+        assert mgr.lookup("10.1.2.3") is True
+        prev_size = mgr.store.size()
+        # Second refresh — fetcher raises; previous set must survive.
+        await mgr.refresh()
+        assert mgr.store.size() == prev_size
+        assert mgr.lookup("10.1.2.3") is True
+
+    asyncio.run(go())
+
+
+def test_manager_uses_surviving_feed_when_one_fails() -> None:
+    def half(url: str) -> str:
+        if url == "ok":
+            return "1.1.1.0/24\n"
+        raise RuntimeError("dead feed")
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["ok", "broken"], fetcher=half)
+        await mgr.refresh()
+        # The successful feed replaces the store; broken feed is ignored.
+        assert mgr.lookup("1.1.1.50") is True
+
+    asyncio.run(go())
+
+
+def test_manager_populate_bypasses_network() -> None:
+    def must_not_run(_url: str) -> str:
+        raise AssertionError("fetcher was called but populate should skip it")
+
+    mgr = ThreatIntelManager(feeds=["a"], fetcher=must_not_run)
+    mgr.populate([(_ip("203.0.113.0"), _ip("203.0.113.255"))])
+    assert mgr.lookup("203.0.113.42") is True
+
+
+def test_manager_empty_feed_list_is_noop() -> None:
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=[])
+        await mgr.refresh()
+        assert mgr.store.size() == 0
+        assert mgr.lookup("8.8.8.8") is False
+
+    asyncio.run(go())
+
+
+def test_manager_ensure_running_skips_when_store_populated() -> None:
+    """Lazy-start should not spawn a fetch task if the store is already loaded.
+
+    This is what stops test runs from making real network requests when an
+    AntsilkMiddleware is built with threat_intel enabled.
+    """
+    fetched = []
+
+    def fetcher(url: str) -> str:
+        fetched.append(url)
+        return ""
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["a"], fetcher=fetcher)
+        mgr.populate([(_ip("1.1.1.0"), _ip("1.1.1.0"))])
+        mgr.ensure_running()
+        # Give the loop a tick in case a task was scheduled.
+        await asyncio.sleep(0)
+        assert mgr._task is None
+        assert fetched == []
+
+    asyncio.run(go())
