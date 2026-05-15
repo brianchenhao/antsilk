@@ -3,7 +3,10 @@ from __future__ import annotations
 import time
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from antsilk import AntsilkConfig, AntsilkMiddleware
 from antsilk.rules.rate_limit import RateLimiter, TokenBucket
 
 
@@ -50,3 +53,32 @@ def test_rate_limiter_rejects_invalid_rate() -> None:
         RateLimiter(requests_per_minute=0)
     with pytest.raises(ValueError):
         RateLimiter(requests_per_minute=-1)
+
+
+def test_burst_of_100_requests_under_default_limit() -> None:
+    """Plan Phase 2 step 4: hammer demo app with 100 reqs in 1s.
+
+    With the default ``requests_per_minute=60`` and a sub-second sync loop,
+    refill is negligible — expect ~60 successes and ~40 rate-limited.
+    """
+    app = FastAPI()
+    app.add_middleware(AntsilkMiddleware)
+
+    @app.get("/")
+    async def root() -> dict[str, bool]:
+        return {"ok": True}
+
+    client = TestClient(app)
+    start = time.monotonic()
+    statuses = [client.get("/").status_code for _ in range(100)]
+    elapsed = time.monotonic() - start
+
+    successes = sum(1 for s in statuses if s == 200)
+    blocked = sum(1 for s in statuses if s == 429)
+
+    assert successes + blocked == 100
+    # Refill during the burst is `elapsed * (60/60s) == elapsed` tokens.
+    # Allow a generous margin around the expected ~60 successes.
+    max_refill = int(elapsed) + 2
+    assert 60 <= successes <= 60 + max_refill
+    assert blocked >= 100 - (60 + max_refill)
