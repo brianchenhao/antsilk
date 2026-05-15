@@ -5,6 +5,7 @@ import ipaddress
 
 import pytest
 
+from antsilk import AntsilkConfig, AntsilkMiddleware
 from antsilk.rules.threat_intel import (
     ThreatIntelManager,
     ThreatIntelStore,
@@ -278,3 +279,85 @@ def test_manager_ensure_running_skips_when_store_populated() -> None:
         assert fetched == []
 
     asyncio.run(go())
+
+
+# ---------------------- middleware integration ------------------
+
+def _drive_middleware(client_ip: str, *, populate: list[tuple[int, int]]) -> int:
+    """Drive AntsilkMiddleware end-to-end via direct ASGI.
+
+    TestClient always sets ``scope["client"] = ("testclient", 50000)``,
+    which isn't a valid IPv4 — so the threat-intel lookup can never
+    match. Bypass TestClient and hand-build the ASGI scope instead.
+    """
+
+    async def inner_app(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    mw = AntsilkMiddleware(
+        inner_app,
+        config=AntsilkConfig(threat_intel_feeds=("fake://",)),
+    )
+    assert mw._threat_intel is not None
+    mw._threat_intel.populate(populate)
+
+    async def recv():  # type: ignore[no-untyped-def]
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    statuses: list[int] = []
+
+    async def send(msg):  # type: ignore[no-untyped-def]
+        if msg["type"] == "http.response.start":
+            statuses.append(msg["status"])
+
+    scope = {
+        "type": "http",
+        "client": (client_ip, 0),
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "headers": [(b"user-agent", b"Mozilla/5.0")],
+    }
+    asyncio.run(mw(scope, recv, send))
+    return statuses[0]
+
+
+def test_middleware_blocks_synthetic_127_0_0_1_listing() -> None:
+    """Plan Phase 5 step 7: synthetic feed containing 127.0.0.1 → 403."""
+    code = _drive_middleware(
+        client_ip="127.0.0.1",
+        populate=[(_ip("127.0.0.1"), _ip("127.0.0.1"))],
+    )
+    assert code == 403
+
+
+def test_middleware_allows_ip_not_in_blocklist() -> None:
+    code = _drive_middleware(
+        client_ip="8.8.8.8",
+        populate=[(_ip("127.0.0.1"), _ip("127.0.0.1"))],
+    )
+    assert code == 200
+
+
+def test_middleware_blocks_ip_inside_cidr_range() -> None:
+    """A whole /24 blocked → every address in that range gets 403."""
+    code = _drive_middleware(
+        client_ip="203.0.113.42",
+        populate=[(_ip("203.0.113.0"), _ip("203.0.113.255"))],
+    )
+    assert code == 403
+
+
+def test_middleware_with_threat_intel_disabled_does_not_lookup() -> None:
+    """If threat_intel_enabled is False, no manager is built and the rule is a no-op."""
+
+    async def inner_app(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    mw = AntsilkMiddleware(
+        inner_app,
+        config=AntsilkConfig(threat_intel_enabled=False),
+    )
+    assert mw._threat_intel is None

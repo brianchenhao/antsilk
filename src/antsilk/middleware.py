@@ -8,6 +8,7 @@ from antsilk.config import AntsilkConfig
 from antsilk.rules.headers import inspect as inspect_headers
 from antsilk.rules.patterns import PatternMatch, scan as scan_patterns
 from antsilk.rules.rate_limit import RateLimiter
+from antsilk.rules.threat_intel import ThreatIntelManager
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -21,13 +22,14 @@ _BLOCKED_BODY = json.dumps({"error": "blocked"}).encode()
 class AntsilkMiddleware:
     """Drop-in security middleware for ASGI apps.
 
-    Enforces in order: per-IP token-bucket rate limit, suspicious-header
-    detection (missing/bad User-Agent, malformed Cookie), and content
-    pattern scanning over request path, query-string values, and header
-    values (except ``User-Agent``) for SQL injection, XSS, and path
-    traversal. The request body is intentionally NOT scanned — body
-    scanning consumes the ASGI receive stream and is deferred to v0.3.0
-    with proper buffering.
+    Enforces, in order: threat-intel IP blocklist (cheapest, rejects
+    hostile traffic before any other work), per-IP token-bucket rate
+    limit, suspicious-header detection (missing/bad User-Agent,
+    malformed Cookie), and content pattern scanning over request path,
+    query-string values, and header values (except ``User-Agent``) for
+    SQL injection, XSS, and path traversal. The request body is
+    intentionally NOT scanned — body scanning consumes the ASGI receive
+    stream and is deferred to v0.3.0 with proper buffering.
     """
 
     def __init__(
@@ -38,6 +40,14 @@ class AntsilkMiddleware:
         self.app = app
         self.config = config or AntsilkConfig()
         self._rate_limiter = RateLimiter(self.config.requests_per_minute)
+        self._threat_intel: ThreatIntelManager | None
+        if self.config.threat_intel_enabled:
+            self._threat_intel = ThreatIntelManager(
+                feeds=self.config.threat_intel_feeds,
+                refresh_seconds=self.config.threat_intel_refresh_hours * 3600,
+            )
+        else:
+            self._threat_intel = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -45,6 +55,13 @@ class AntsilkMiddleware:
             return
 
         ip = _client_ip(scope)
+
+        if self._threat_intel is not None:
+            self._threat_intel.ensure_running()
+            if self._threat_intel.lookup(ip):
+                await _send_blocked(send)
+                return
+
         if not self._rate_limiter.allow(ip):
             await _send_rate_limited(send)
             return

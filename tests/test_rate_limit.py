@@ -62,7 +62,10 @@ def test_burst_of_100_requests_under_default_limit() -> None:
     refill is negligible — expect ~60 successes and ~40 rate-limited.
     """
     app = FastAPI()
-    app.add_middleware(AntsilkMiddleware)
+    app.add_middleware(
+        AntsilkMiddleware,
+        config=AntsilkConfig(threat_intel_enabled=False),
+    )
 
     @app.get("/")
     async def root() -> dict[str, bool]:

@@ -4,13 +4,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from antsilk import AntsilkMiddleware
+from antsilk import AntsilkConfig, AntsilkMiddleware
 from antsilk.rules.headers import HeaderCheck, inspect
 
 
 def _build_app() -> FastAPI:
     app = FastAPI()
-    app.add_middleware(AntsilkMiddleware)
+    app.add_middleware(
+        AntsilkMiddleware,
+        config=AntsilkConfig(threat_intel_enabled=False),
+    )
 
     @app.get("/")
     async def root() -> dict[str, bool]:

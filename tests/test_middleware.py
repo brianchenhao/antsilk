@@ -14,7 +14,10 @@ def test_middleware_passes_request_through(client: TestClient) -> None:
 
 def test_middleware_returns_429_when_rate_limit_exceeded() -> None:
     app = FastAPI()
-    app.add_middleware(AntsilkMiddleware, config=AntsilkConfig(requests_per_minute=3))
+    app.add_middleware(
+        AntsilkMiddleware,
+        config=AntsilkConfig(requests_per_minute=3, threat_intel_enabled=False),
+    )
 
     @app.get("/")
     async def root() -> dict[str, bool]:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from antsilk.rules.threat_intel import DEFAULT_FEEDS
 
 
 @dataclass
@@ -14,3 +16,6 @@ class AntsilkConfig:
     """
 
     requests_per_minute: int = 60
+    threat_intel_enabled: bool = True
+    threat_intel_feeds: tuple[str, ...] = DEFAULT_FEEDS
+    threat_intel_refresh_hours: int = 6
