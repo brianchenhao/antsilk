@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl
 
 from antsilk.config import AntsilkConfig
+from antsilk.rules.headers import inspect as inspect_headers
 from antsilk.rules.patterns import PatternMatch, scan as scan_patterns
 from antsilk.rules.rate_limit import RateLimiter
 
@@ -20,11 +21,13 @@ _BLOCKED_BODY = json.dumps({"error": "blocked"}).encode()
 class AntsilkMiddleware:
     """Drop-in security middleware for ASGI apps.
 
-    Enforces a per-IP token-bucket rate limit and scans request path,
-    query-string values, and header values (except ``User-Agent``) for
-    SQL injection, XSS, and path-traversal patterns. The request body
-    is intentionally NOT scanned — body scanning consumes the ASGI
-    receive stream and is deferred to v0.3.0 with proper buffering.
+    Enforces in order: per-IP token-bucket rate limit, suspicious-header
+    detection (missing/bad User-Agent, malformed Cookie), and content
+    pattern scanning over request path, query-string values, and header
+    values (except ``User-Agent``) for SQL injection, XSS, and path
+    traversal. The request body is intentionally NOT scanned — body
+    scanning consumes the ASGI receive stream and is deferred to v0.3.0
+    with proper buffering.
     """
 
     def __init__(
@@ -44,6 +47,10 @@ class AntsilkMiddleware:
         ip = _client_ip(scope)
         if not self._rate_limiter.allow(ip):
             await _send_rate_limited(send)
+            return
+
+        if inspect_headers(scope.get("headers", [])) is not None:
+            await _send_blocked(send)
             return
 
         if _scan_request(scope) is not None:

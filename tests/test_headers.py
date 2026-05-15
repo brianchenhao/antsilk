@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from antsilk import AntsilkMiddleware
 from antsilk.rules.headers import HeaderCheck, inspect
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(AntsilkMiddleware)
+
+    @app.get("/")
+    async def root() -> dict[str, bool]:
+        return {"ok": True}
+
+    return app
 
 
 # ---------------------- legitimate clients pass -----------------
@@ -119,3 +133,64 @@ def test_bad_ua_blocks_before_cookie_check() -> None:
     result = inspect(headers)
     assert result is not None
     assert result.rule == "bad_user_agent"
+
+
+# --------------------- HTTP-level integration -------------------
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "curl/8.4.0",
+        "HTTPie/3.2.2",
+    ],
+)
+def test_middleware_allows_legit_user_agents(user_agent: str) -> None:
+    client = TestClient(_build_app())
+    response = client.get("/", headers={"User-Agent": user_agent})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "sqlmap/1.7.2#stable (https://sqlmap.org)",
+        "Nikto/2.5.0",
+        "masscan/1.3.2",
+        "Nmap Scripting Engine",
+    ],
+)
+def test_middleware_blocks_known_bad_user_agents(user_agent: str) -> None:
+    client = TestClient(_build_app())
+    response = client.get("/", headers={"User-Agent": user_agent})
+    assert response.status_code == 403
+    assert response.json() == {"error": "blocked"}
+
+
+def test_middleware_blocks_empty_user_agent() -> None:
+    client = TestClient(_build_app())
+    response = client.get("/", headers={"User-Agent": ""})
+    assert response.status_code == 403
+    assert response.json() == {"error": "blocked"}
+
+
+def test_middleware_blocks_malformed_cookie() -> None:
+    client = TestClient(_build_app())
+    response = client.get(
+        "/",
+        headers={"User-Agent": "Mozilla/5.0", "Cookie": "justaword"},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"error": "blocked"}
+
+
+def test_middleware_allows_legit_cookie() -> None:
+    client = TestClient(_build_app())
+    response = client.get(
+        "/",
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Cookie": "session=abc123; theme=dark",
+        },
+    )
+    assert response.status_code == 200
