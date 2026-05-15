@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-05-15T13:25:39+00:00",
+  "total_blocked": 6,
+  "unique_ips": 1,
+  "first_seen": "2026-05-15T09:58:03.207182+00:00",
+  "last_seen": "2026-05-15T09:58:03.294988+00:00",
+  "by_rule": {
+    "threat_intel": 0,
+    "rate_limit": 0,
+    "sqli": 2,
+    "xss": 1,
+    "path_traversal": 1,
+    "bad_header": 2,
+    "bad_token": 0
+  }
+}

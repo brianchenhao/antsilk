@@ -68,15 +68,15 @@ site_build/
 /site/_mkdocs_build/   # use this if you reconfigure site_dir to avoid collision
 
 # ============================================================
-# Astro landing page (site/ → antsilk.com)
+# Vite landing page (site/ → antsilk.com)
 # ============================================================
 site/node_modules/
 site/dist/
-site/.astro/
 site/.cache/
 site/.output/
 site/.vercel/
 site/.netlify/
+site/*.tsbuildinfo
 
 # ============================================================
 # Secrets + env
