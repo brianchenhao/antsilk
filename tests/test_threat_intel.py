@@ -281,6 +281,63 @@ def test_manager_ensure_running_skips_when_store_populated() -> None:
     asyncio.run(go())
 
 
+def test_manager_ensure_running_outside_event_loop_is_noop() -> None:
+    """``ensure_running`` is called eagerly from middleware ``__call__``;
+    if no event loop is running yet (e.g. invoked from sync code), it
+    must quietly skip rather than raise."""
+    mgr = ThreatIntelManager(feeds=["a"], fetcher=lambda _u: "")
+    mgr.ensure_running()  # store empty, no loop → silent no-op
+    assert mgr._task is None
+
+
+def test_manager_ensure_running_spawns_refresh_loop_then_close_cancels_it() -> None:
+    """Empty store + live loop should start a refresh task; ``close()``
+    must cancel it cleanly without raising."""
+    state = {"calls": 0}
+
+    def fetcher(_url: str) -> str:
+        state["calls"] += 1
+        return "1.1.1.0/24\n"
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(
+            feeds=["fake"], fetcher=fetcher, refresh_seconds=3600
+        )
+        mgr.ensure_running()
+        assert mgr._task is not None
+
+        # Wait until the loop has completed its first refresh — the
+        # _refresh_loop hits ``await refresh()`` then sleeps; one tick
+        # past that and the store should be loaded.
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if mgr.store.size() > 0:
+                break
+        assert mgr.lookup("1.1.1.5") is True
+        assert state["calls"] >= 1
+
+        # Second call is a no-op now that the task is still alive.
+        prev_task = mgr._task
+        mgr.ensure_running()
+        assert mgr._task is prev_task
+
+        await mgr.close()
+        assert mgr._task is None
+
+    asyncio.run(go())
+
+
+def test_manager_close_when_no_task_is_noop() -> None:
+    """Calling ``close()`` on a manager that never started must succeed."""
+
+    async def go() -> None:
+        mgr = ThreatIntelManager(feeds=["a"], fetcher=lambda _u: "")
+        await mgr.close()  # must not raise
+        assert mgr._task is None
+
+    asyncio.run(go())
+
+
 # ---------------------- middleware integration ------------------
 
 def _drive_middleware(client_ip: str, *, populate: list[tuple[int, int]]) -> int:
