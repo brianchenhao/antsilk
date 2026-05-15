@@ -4,22 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "antsilk"
-version = "0.0.1"
-description = "Drop-in security middleware for Python web applications. Coming soon."
+version = "0.1.0"
+description = "Drop-in security middleware for Python ASGI apps."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
-keywords = ["security", "waf", "middleware", "fastapi", "identity-gateway"]
+requires-python = ">=3.10"
+keywords = ["security", "waf", "middleware", "asgi", "fastapi", "starlette"]
 authors = [
     { name = "brianchenhao", email = "brianchenjunhao@gmail.com" }
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -27,6 +27,11 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "httpx>=0.27", "fastapi>=0.110"]
+docs = ["mkdocs>=1.6", "mkdocs-material>=9.5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
