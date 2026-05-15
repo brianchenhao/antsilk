@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl
 
 from antsilk.config import AntsilkConfig
-from antsilk.rules.headers import inspect as inspect_headers
+from antsilk.events import Event
+from antsilk.rules.headers import HeaderCheck, inspect as inspect_headers
 from antsilk.rules.patterns import PatternMatch, scan as scan_patterns
 from antsilk.rules.rate_limit import RateLimiter
 from antsilk.rules.threat_intel import ThreatIntelManager
@@ -14,6 +17,8 @@ Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
 Send = Callable[[dict[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+_LOG = logging.getLogger("antsilk.middleware")
 
 _RATE_LIMITED_BODY = json.dumps({"error": "rate_limited"}).encode()
 _BLOCKED_BODY = json.dumps({"error": "blocked"}).encode()
@@ -30,6 +35,11 @@ class AntsilkMiddleware:
     SQL injection, XSS, and path traversal. The request body is
     intentionally NOT scanned — body scanning consumes the ASGI receive
     stream and is deferred to v0.3.0 with proper buffering.
+
+    Every block writes a structured ``Event`` to the configured sink via
+    ``asyncio.to_thread`` so blocking I/O does not stall the event loop.
+    Sink failures are logged but never propagate — a broken sink must
+    not turn into a 500 for the adopter's app.
     """
 
     def __init__(
@@ -40,6 +50,7 @@ class AntsilkMiddleware:
         self.app = app
         self.config = config or AntsilkConfig()
         self._rate_limiter = RateLimiter(self.config.requests_per_minute)
+        self._sink = self.config.sink
         self._threat_intel: ThreatIntelManager | None
         if self.config.threat_intel_enabled:
             self._threat_intel = ThreatIntelManager(
@@ -59,22 +70,83 @@ class AntsilkMiddleware:
         if self._threat_intel is not None:
             self._threat_intel.ensure_running()
             if self._threat_intel.lookup(ip):
+                await self._emit(
+                    scope,
+                    ip,
+                    rule_triggered="threat_intel",
+                    severity="high",
+                    response_code=403,
+                    event_data={"feeds": list(self.config.threat_intel_feeds)},
+                )
                 await _send_blocked(send)
                 return
 
         if not self._rate_limiter.allow(ip):
+            await self._emit(
+                scope,
+                ip,
+                rule_triggered="rate_limit",
+                severity="low",
+                response_code=429,
+                event_data={
+                    "requests_per_minute": self.config.requests_per_minute
+                },
+            )
             await _send_rate_limited(send)
             return
 
-        if inspect_headers(scope.get("headers", [])) is not None:
+        header_check = inspect_headers(scope.get("headers", []))
+        if header_check is not None:
+            await self._emit(
+                scope,
+                ip,
+                rule_triggered="bad_header",
+                severity="medium",
+                response_code=403,
+                event_data={"subrule": header_check.rule},
+            )
             await _send_blocked(send)
             return
 
-        if _scan_request(scope) is not None:
+        pattern_match = _scan_request(scope)
+        if pattern_match is not None:
+            await self._emit(
+                scope,
+                ip,
+                rule_triggered=pattern_match.rule,
+                severity="high",
+                response_code=403,
+                event_data={"matched": pattern_match.matched},
+            )
             await _send_blocked(send)
             return
 
         await self.app(scope, receive, send)
+
+    async def _emit(
+        self,
+        scope: Scope,
+        ip: str,
+        *,
+        rule_triggered: str,
+        severity: str,
+        response_code: int,
+        event_data: dict[str, Any],
+    ) -> None:
+        event = Event.now(
+            ip_address=ip,
+            method=scope.get("method", ""),
+            path=scope.get("path", ""),
+            rule_triggered=rule_triggered,
+            severity=severity,
+            response_code=response_code,
+            user_agent=_header(scope, b"user-agent"),
+            event_data=event_data,
+        )
+        try:
+            await asyncio.to_thread(self._sink.write, event)
+        except Exception:
+            _LOG.exception("antsilk sink write failed")
 
 
 def _client_ip(scope: Scope) -> str:
@@ -82,6 +154,13 @@ def _client_ip(scope: Scope) -> str:
     if not client:
         return "unknown"
     return client[0]
+
+
+def _header(scope: Scope, name: bytes) -> str | None:
+    for header_name, value in scope.get("headers", []):
+        if header_name == name:
+            return value.decode("latin-1", errors="replace")
+    return None
 
 
 def _scan_request(scope: Scope) -> PatternMatch | None:
