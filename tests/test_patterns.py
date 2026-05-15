@@ -1,8 +1,26 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from antsilk import AntsilkMiddleware
 from antsilk.rules.patterns import scan
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(AntsilkMiddleware)
+
+    @app.get("/")
+    async def root() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/items/{item_id}")
+    async def item(item_id: str) -> dict[str, str]:
+        return {"item_id": item_id}
+
+    return app
 
 
 # ----------------------------- SQLi -----------------------------
@@ -86,3 +104,71 @@ def test_scan_returns_first_matching_rule() -> None:
     match = scan("UNION SELECT 1 -- <script>")
     assert match is not None
     assert match.rule == "sqli"
+
+
+# ---------------------- HTTP-level integration -----------------
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "id=1 OR 1=1",
+        "name=UNION SELECT password FROM users",
+        "comment=<script>alert(1)</script>",
+        "redirect=javascript:alert(1)",
+        "file=../etc/passwd",
+        "path=..%2fetc%2fpasswd",
+    ],
+)
+def test_middleware_blocks_attack_payloads_with_403(query: str) -> None:
+    client = TestClient(_build_app())
+    response = client.get(f"/?{query}")
+    assert response.status_code == 403
+    assert response.json() == {"error": "blocked"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "q=hello, world",
+        "search=Python tutorials",
+        "email=user@example.com",
+        "order_by=name asc",
+        "filter=price<100",
+    ],
+)
+def test_middleware_allows_legitimate_queries(query: str) -> None:
+    client = TestClient(_build_app())
+    response = client.get(f"/?{query}")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_middleware_skips_user_agent_in_pattern_scan() -> None:
+    """User-Agent is the headers rule's job (Phase 4), not patterns'."""
+    client = TestClient(_build_app())
+    response = client.get(
+        "/",
+        headers={"User-Agent": "<script>alert(1)</script>"},
+    )
+    assert response.status_code == 200
+
+
+def test_middleware_blocks_attack_pattern_in_other_header() -> None:
+    client = TestClient(_build_app())
+    response = client.get(
+        "/",
+        headers={"X-Forwarded-For": "1 OR 1=1"},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"error": "blocked"}
+
+
+def test_blocked_response_does_not_echo_matched_pattern() -> None:
+    """Critical Feature Detail #5: do NOT echo the matched pattern (info leak)."""
+    client = TestClient(_build_app())
+    response = client.get("/?id=UNION SELECT secret FROM users")
+    assert response.status_code == 403
+    body = response.text
+    assert "UNION" not in body.upper()
+    assert "secret" not in body
+    assert response.json() == {"error": "blocked"}
