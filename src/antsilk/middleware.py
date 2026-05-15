@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from fnmatch import fnmatchcase
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl
 
-from antsilk.config import AntsilkConfig
+from antsilk.config import AntsilkConfig, RouteRule
 from antsilk.events import Event
 from antsilk.rules.headers import HeaderCheck, inspect as inspect_headers
 from antsilk.rules.patterns import PatternMatch, scan as scan_patterns
@@ -66,8 +67,11 @@ class AntsilkMiddleware:
             return
 
         ip = _client_ip(scope)
+        route_rule = self._match_route(scope.get("path", ""))
 
-        if self._threat_intel is not None:
+        if self._threat_intel is not None and not (
+            route_rule is not None and route_rule.skip_threat_intel
+        ):
             self._threat_intel.ensure_running()
             if self._threat_intel.lookup(ip):
                 await self._emit(
@@ -81,19 +85,20 @@ class AntsilkMiddleware:
                 await _send_blocked(send)
                 return
 
-        if not self._rate_limiter.allow(ip):
-            await self._emit(
-                scope,
-                ip,
-                rule_triggered="rate_limit",
-                severity="low",
-                response_code=429,
-                event_data={
-                    "requests_per_minute": self.config.requests_per_minute
-                },
-            )
-            await _send_rate_limited(send)
-            return
+        if not (route_rule is not None and route_rule.skip_rate_limit):
+            if not self._rate_limiter.allow(ip):
+                await self._emit(
+                    scope,
+                    ip,
+                    rule_triggered="rate_limit",
+                    severity="low",
+                    response_code=429,
+                    event_data={
+                        "requests_per_minute": self.config.requests_per_minute
+                    },
+                )
+                await _send_rate_limited(send)
+                return
 
         header_check = inspect_headers(scope.get("headers", []))
         if header_check is not None:
@@ -108,20 +113,29 @@ class AntsilkMiddleware:
             await _send_blocked(send)
             return
 
-        pattern_match = _scan_request(scope)
-        if pattern_match is not None:
-            await self._emit(
-                scope,
-                ip,
-                rule_triggered=pattern_match.rule,
-                severity="high",
-                response_code=403,
-                event_data={"matched": pattern_match.matched},
-            )
-            await _send_blocked(send)
-            return
+        if not (route_rule is not None and route_rule.skip_pattern_scan):
+            pattern_match = _scan_request(scope)
+            if pattern_match is not None:
+                await self._emit(
+                    scope,
+                    ip,
+                    rule_triggered=pattern_match.rule,
+                    severity="high",
+                    response_code=403,
+                    event_data={"matched": pattern_match.matched},
+                )
+                await _send_blocked(send)
+                return
 
         await self.app(scope, receive, send)
+
+    def _match_route(self, path: str) -> RouteRule | None:
+        """First matching rule wins. Patterns use ``fnmatchcase`` so the
+        same config matches identically on Windows and Linux."""
+        for rule in self.config.route_rules:
+            if fnmatchcase(path, rule.path):
+                return rule
+        return None
 
     async def _emit(
         self,
