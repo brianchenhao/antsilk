@@ -60,8 +60,11 @@ events.jsonl
 # MkDocs (docs/ → docs.antsilk.com)
 # ============================================================
 # MkDocs default build output. Path depends on where mkdocs.yml lives:
-# if docs/mkdocs.yml, build goes to docs/site/
+# if docs/mkdocs.yml, build goes to docs/site/. The project now sets
+# site_dir to ../site_build so the build artefact lives at the repo
+# root and is easy to tarball / SFTP — exclude that too.
 docs/site/
+site_build/
 /site/_mkdocs_build/   # use this if you reconfigure site_dir to avoid collision
 
 # ============================================================

@@ -1,0 +1,48 @@
+site_name: Antsilk
+site_description: Drop-in security middleware for Python ASGI apps.
+site_url: https://docs.antsilk.com/
+repo_url: https://github.com/brianchenhao/antsilk
+repo_name: brianchenhao/antsilk
+edit_uri: edit/main/docs/
+
+docs_dir: .
+site_dir: ../site_build
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - scheme: default
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Overview: index.md
+  - Quickstart: quickstart.md
+  - Configuration: configuration.md
+  - Rules: rules.md
+  - Per-route overrides: per-route-overrides.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - toc:
+      permalink: true
