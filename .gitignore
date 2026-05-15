@@ -110,3 +110,11 @@ desktop.ini
 logs/
 tmp/
 .cache/
+
+# ============================================================
+# Local planning / AI context — never committed, never pushed
+# ============================================================
+PLAN-*.md
+PLANstage1portfolio.md
+CLAUDE.md
+.claude/
